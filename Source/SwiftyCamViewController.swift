@@ -157,12 +157,18 @@ open class SwiftyCamViewController: UIViewController {
     /// Sets whether or not video recordings will record audio
     /// Setting to true will prompt user for access to microphone on View Controller launch.
     public var audioEnabled                   = true
+
+  /// PreviewView for the capture session
+
+	public var previewLayer                 : PreviewView!
     
     /// Public access to Pinch Gesture
     fileprivate(set) public var pinchGesture  : UIPinchGestureRecognizer!
     
     /// Public access to Pan Gesture
     fileprivate(set) public var panGesture    : UIPanGestureRecognizer!
+
+		fileprivate(set) public var singleTapGesture: UITapGestureRecognizer!
 
 
 	// MARK: Public Get-only Variable Declarations
@@ -227,10 +233,6 @@ open class SwiftyCamViewController: UIViewController {
 
 	fileprivate var videoDevice                  : AVCaptureDevice?
 
-	/// PreviewView for the capture session
-
-	fileprivate var previewLayer                 : PreviewView!
-
 	/// UIView for front facing flash
 
 	fileprivate var flashView                    : UIView?
@@ -255,6 +257,7 @@ open class SwiftyCamViewController: UIViewController {
 
 	override open func viewDidLoad() {
 		super.viewDidLoad()
+
         previewLayer = PreviewView(frame: view.frame, videoGravity: videoGravity)
         view.addSubview(previewLayer)
         view.sendSubview(toBack: previewLayer)
@@ -1006,7 +1009,7 @@ extension SwiftyCamViewController : SwiftyCamButtonDelegate {
 
 	/// Set UITapGesture to take photo
 
-	public func buttonWasTapped() {
+	open func buttonWasTapped() {
 		takePhoto()
 	}
 
@@ -1189,7 +1192,7 @@ extension SwiftyCamViewController {
 		pinchGesture.delegate = self
 		previewLayer.addGestureRecognizer(pinchGesture)
 
-		let singleTapGesture = UITapGestureRecognizer(target: self, action: #selector(singleTapGesture(tap:)))
+		singleTapGesture = UITapGestureRecognizer(target: self, action: #selector(singleTapGesture(tap:)))
 		singleTapGesture.numberOfTapsRequired = 1
 		singleTapGesture.delegate = self
 		previewLayer.addGestureRecognizer(singleTapGesture)
@@ -1198,13 +1201,12 @@ extension SwiftyCamViewController {
 		doubleTapGesture.numberOfTapsRequired = 2
 		doubleTapGesture.delegate = self
 		previewLayer.addGestureRecognizer(doubleTapGesture)
-        
-        panGesture = UIPanGestureRecognizer(target: self, action: #selector(panGesture(pan:)))
-        panGesture.delegate = self
-        previewLayer.addGestureRecognizer(panGesture)
+
+    panGesture = UIPanGestureRecognizer(target: self, action: #selector(panGesture(pan:)))
+    panGesture.delegate = self
+    previewLayer.addGestureRecognizer(panGesture)
 	}
 }
-
 
 // MARK: UIGestureRecognizerDelegate
 
@@ -1212,14 +1214,10 @@ extension SwiftyCamViewController : UIGestureRecognizerDelegate {
 
 	/// Set beginZoomScale when pinch begins
 
-	public func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+    open func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
 		if gestureRecognizer.isKind(of: UIPinchGestureRecognizer.self) {
 			beginZoomScale = zoomScale;
 		}
 		return true
 	}
 }
-
-
-
-
