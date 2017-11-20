@@ -105,12 +105,14 @@ class ViewController: SwiftyCamViewController, SwiftyCamViewControllerDelegate {
     }
     
     @IBAction func toggleFlashTapped(_ sender: Any) {
-        flashEnabled = !flashEnabled
-        
-        if flashEnabled == true {
-            flashButton.setImage(#imageLiteral(resourceName: "flash"), for: UIControlState())
-        } else {
-            flashButton.setImage(#imageLiteral(resourceName: "flashOutline"), for: UIControlState())
+        if let mode = cycleFlash() {
+            if mode == .on {
+                flashButton.setImage(#imageLiteral(resourceName: "flashOn"), for: UIControlState())
+            } else if mode == .auto {
+                flashButton.setImage(#imageLiteral(resourceName: "flashAuto"), for: UIControlState())
+            } else {
+                flashButton.setImage(#imageLiteral(resourceName: "flashOff"), for: UIControlState())
+            }
         }
     }
 }
