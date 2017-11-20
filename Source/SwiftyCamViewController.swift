@@ -427,12 +427,6 @@ open class SwiftyCamViewController: UIViewController {
             return
         }
 
-        print("takePhoto / DEVICE HAS...")
-        print(device.hasFlash)
-        print(device.hasTorch)
-        print(currentCamera)
-        print("***")
-
         if currentCamera == .front && (device.flashMode == .on || device.flashMode == .auto) {
             flashView = UIView(frame: view.frame)
             flashView?.alpha = 0.0
@@ -961,8 +955,8 @@ open class SwiftyCamViewController: UIViewController {
         }
     }
 
-    /// Toggles between enabling and disabling flash
-
+    /// Cycles on, off, auto for flash
+    // off = 0, on = 1, auto = 2
     public func cycleFlash() -> AVCaptureFlashMode? {
         //        guard let device = AVCaptureDevice.defaultDevice(withMediaType: AVMediaTypeVideo), device.hasFlash else {
         //            return
@@ -981,7 +975,6 @@ open class SwiftyCamViewController: UIViewController {
                 device.flashMode = .on
             }
             device.unlockForConfiguration()
-            print(device.flashMode.rawValue) // off = 0, on = 1, auto = 2
             return device.flashMode
         } catch _ { return nil }
     }
