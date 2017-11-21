@@ -21,6 +21,37 @@ import AVFoundation
 
 /// A UIViewController Camera View Subclass
 
+@available(iOS, introduced: 10.0)
+class DKCameraPhotoCapturer: NSObject, AVCapturePhotoCaptureDelegate {
+
+    var didCaptureWithImageData: ((_ imageData: Data) -> Void)?
+
+    private var imageData: Data?
+
+    func capture(_ output: AVCapturePhotoOutput,
+                 didFinishProcessingPhotoSampleBuffer photoSampleBuffer: CMSampleBuffer?,
+                 previewPhotoSampleBuffer: CMSampleBuffer?,
+                     resolvedSettings: AVCaptureResolvedPhotoSettings,
+                     bracketSettings: AVCaptureBracketedStillImageSettings?,
+                     error: Error?) {
+        guard let photoSampleBuffer = photoSampleBuffer else {
+            print("DKCameraError: \(error!)")
+            return
+        }
+
+        self.imageData = AVCapturePhotoOutput.jpegPhotoDataRepresentation(forJPEGSampleBuffer: photoSampleBuffer, previewPhotoSampleBuffer: previewPhotoSampleBuffer)
+    }
+
+    func capture(_ output: AVCapturePhotoOutput, didFinishCaptureForResolvedSettings resolvedSettings: AVCaptureResolvedPhotoSettings, error: Error?) {
+        if let error = error {
+            print("DKCameraError: \(error)")
+        } else if let didCaptureWithImageData = self.didCaptureWithImageData {
+            didCaptureWithImageData(self.imageData!)
+        }
+    }
+
+}
+
 open class SwiftyCamViewController: UIViewController {
 
     // MARK: Enumeration Declaration
@@ -227,7 +258,7 @@ open class SwiftyCamViewController: UIViewController {
 
     /// Photo File Output variable
 
-    fileprivate var photoFileOutput              : AVCaptureStillImageOutput?
+    fileprivate var photoFileOutput              : AVCaptureOutput?
 
     /// Video Device variable
 
@@ -244,6 +275,29 @@ open class SwiftyCamViewController: UIViewController {
     /// Last changed orientation
 
     fileprivate var deviceOrientation            : UIDeviceOrientation?
+
+    /// The flashMode will to be remembered to next use. Initially off
+    open var flashMode: AVCaptureDevice.FlashMode! = .off {
+        didSet {
+            self.updateFlashMode()
+            self.updateFlashModeToUserDefautls(self.flashMode)
+        }
+    }
+
+    fileprivate var __defaultPhotoSettings: Any?
+    @available(iOS 10.0, *)
+    fileprivate var defaultPhotoSettings: AVCapturePhotoSettings {
+        get {
+            if __defaultPhotoSettings == nil {
+                let photoSettings = AVCapturePhotoSettings()
+                photoSettings.isHighResolutionPhotoEnabled = true
+
+                __defaultPhotoSettings = photoSettings
+            }
+
+            return __defaultPhotoSettings as! AVCapturePhotoSettings
+        }
+    }
 
     /// Disable view autorotation for forced portrait recorindg
 
@@ -422,12 +476,7 @@ open class SwiftyCamViewController: UIViewController {
      */
 
     public func takePhoto() {
-
-        guard let device = videoDevice else {
-            return
-        }
-
-        if currentCamera == .front && (device.flashMode == .on || device.flashMode == .auto) {
+        if currentCamera == .front && (flashMode == .on || flashMode == .auto) {
             flashView = UIView(frame: view.frame)
             flashView?.alpha = 0.0
             flashView?.backgroundColor = UIColor.white
@@ -736,12 +785,20 @@ open class SwiftyCamViewController: UIViewController {
     /// Configure Photo Output
 
     fileprivate func configurePhotoOutput() {
-        let photoFileOutput = AVCaptureStillImageOutput()
+        var captureOutput: AVCaptureOutput!
+        if #available(iOS 10.0, *) {
+            let o = AVCapturePhotoOutput()
+            o.isHighResolutionCaptureEnabled = true
+            captureOutput = o
+        } else {
+            let o = AVCaptureStillImageOutput()
+            o.outputSettings = [AVVideoCodecKey: AVVideoCodecJPEG]
+            captureOutput = o
+        }
 
-        if self.session.canAddOutput(photoFileOutput) {
-            photoFileOutput.outputSettings  = [AVVideoCodecKey: AVVideoCodecJPEG]
-            self.session.addOutput(photoFileOutput)
-            self.photoFileOutput = photoFileOutput
+        if self.session.canAddOutput(captureOutput) {
+            self.session.addOutput(captureOutput)
+            self.photoFileOutput = captureOutput
         }
     }
 
@@ -827,7 +884,62 @@ open class SwiftyCamViewController: UIViewController {
         return image
     }
 
+    fileprivate var currentCapturer: Any? // DKCameraPhotoCapturer
+
     fileprivate func capturePhotoAsyncronously(completionHandler: @escaping(Bool) -> ()) {
+
+        func process(_ imageData: Data) {
+            let image = self.processPhoto(imageData)
+            // Call delegate and return new image
+            DispatchQueue.main.async {
+                self.cameraDelegate?.swiftyCam(self, didTake: image)
+            }
+            completionHandler(true)
+        }
+
+        if #available(iOS 10.0, *) {
+            if let photoCapture = self.photoFileOutput as? AVCapturePhotoOutput, let _ = photoCapture.connection(withMediaType: AVMediaTypeVideo) {
+//                connection.videoOrientation = self.currentOrientation.toAVCaptureVideoOrientation()
+//                connection.videoScaleAndCropFactor = self.zoomScale
+
+                let settings = AVCapturePhotoSettings(from: self.defaultPhotoSettings)
+
+                let capturer = DKCameraPhotoCapturer()
+                capturer.didCaptureWithImageData = { imageData in
+                    process(imageData)
+                    self.currentCapturer = nil
+                }
+                photoCapture.capturePhoto(with: settings, delegate: capturer)
+
+                self.currentCapturer = capturer
+            }
+        } else {
+            if let stillImageOutput = self.photoFileOutput as? AVCaptureStillImageOutput, let connection = stillImageOutput.connection(withMediaType: AVMediaTypeVideo) {
+
+                // TODO: Do we want this? Maybe if we use core motion to detect orientation
+//                connection.videoOrientation = self.currentOrientation.toAVCaptureVideoOrientation()
+//                connection.videoScaleAndCropFactor = self.zoomScale
+
+                stillImageOutput.captureStillImageAsynchronously(from: connection, completionHandler: { (imageDataSampleBuffer, error) in
+                    if error == nil {
+                        let _imageData = AVCaptureStillImageOutput.jpegStillImageNSDataRepresentation(imageDataSampleBuffer!)
+
+                        guard let imageData = _imageData else {
+                            completionHandler(false)
+                            return
+                        }
+
+                        process(imageData)
+                    } else {
+                        completionHandler(false)
+                    }
+                })
+            } else {
+                completionHandler(false)
+            }
+        }
+
+        /*
         if let videoConnection = photoFileOutput?.connection(withMediaType: AVMediaTypeVideo) {
 
             photoFileOutput?.captureStillImageAsynchronously(from: videoConnection, completionHandler: {(sampleBuffer, error) in
@@ -847,6 +959,7 @@ open class SwiftyCamViewController: UIViewController {
         } else {
             completionHandler(false)
         }
+         */
     }
 
     /// Handle Denied App Privacy Settings
@@ -910,34 +1023,9 @@ open class SwiftyCamViewController: UIViewController {
         return nil
     }
 
-    /// Enable or disable flash for photo
-
-    fileprivate func changeFlashSettings(device: AVCaptureDevice, mode: AVCaptureFlashMode) {
-        do {
-            try device.lockForConfiguration()
-            device.flashMode = mode
-            device.unlockForConfiguration()
-        } catch {
-            print("[SwiftyCam]: \(error)")
-        }
-    }
-
-    /// Enable flash
-
-    /*
-     fileprivate func enableFlash() {
-     if self.isCameraTorchOn == false {
-     toggleFlash()
-     }
-     }
-     */
     /// Disable flash
 
     fileprivate func disableFlash() {
-        // if self.isCameraTorchOn == true {
-        //  toggleFlash()
-        // }
-
         guard let device = AVCaptureDevice.defaultDevice(withMediaType: AVMediaTypeVideo), device.hasFlash else {
             return
         }
@@ -955,8 +1043,71 @@ open class SwiftyCamViewController: UIViewController {
         }
     }
 
+    public func cycleFlashMode() {
+        if let currentDevice = videoDevice, let captureOutput = self.photoFileOutput, currentDevice.isFlashAvailable  {
+            let initialMode = self.flashMode
+            var nextPossibleMode = nextFlashMode(self.flashMode)
+            var supportedMode: AVCaptureDevice.FlashMode?
+
+            if #available(iOS 10.0, *) {
+                while supportedMode == nil {
+                    let isFlashModeSupported = (captureOutput as! AVCapturePhotoOutput).__supportedFlashModes.contains(NSNumber(value: nextPossibleMode.rawValue))
+                    if isFlashModeSupported {
+                        supportedMode = nextPossibleMode
+                    } else {
+                        nextPossibleMode = nextFlashMode(nextPossibleMode)
+                    }
+                    if nextPossibleMode == initialMode { break } // This should never happen?
+                }
+            } else {
+                while supportedMode == nil {
+                    let isFlashModeSupported = currentDevice.isFlashModeSupported(nextPossibleMode)
+                    if isFlashModeSupported {
+                        supportedMode = nextPossibleMode
+                    } else {
+                        nextPossibleMode = nextFlashMode(nextPossibleMode)
+                    }
+                    if nextPossibleMode == initialMode { break } // This should never happen?
+                }
+            }
+
+            if let m = supportedMode {
+                self.flashMode = m
+            }
+        }
+    }
+
+    @objc internal func nextFlashMode(_ cur: AVCaptureDevice.FlashMode) -> AVCaptureDevice.FlashMode {
+        switch cur {
+        case .auto:
+            return .off
+        case .on:
+            return .auto
+        case .off:
+            return .on
+        }
+    }
+
+    open func updateFlashMode() {
+        if let currentDevice = videoDevice, let captureOutput = self.photoFileOutput, currentDevice.isFlashAvailable  {
+            if #available(iOS 10.0, *) {
+                let isFlashModeSupported = (captureOutput as! AVCapturePhotoOutput).__supportedFlashModes.contains(NSNumber(value: self.flashMode.rawValue))
+                if isFlashModeSupported {
+                    self.defaultPhotoSettings.flashMode = self.flashMode
+                }
+            } else {
+                if currentDevice.isFlashModeSupported(self.flashMode) {
+                    try! currentDevice.lockForConfiguration()
+                    currentDevice.flashMode = self.flashMode
+                    currentDevice.unlockForConfiguration()
+                }
+            }
+        }
+    }
+
     /// Cycles on, off, auto for flash
     // off = 0, on = 1, auto = 2
+    /*
     public func cycleFlash() -> AVCaptureFlashMode? {
         //        guard let device = AVCaptureDevice.defaultDevice(withMediaType: AVMediaTypeVideo), device.hasFlash else {
         //            return
@@ -965,18 +1116,33 @@ open class SwiftyCamViewController: UIViewController {
             return nil
         }
 
+        print("new guts")
         do {
             try device.lockForConfiguration()
             if device.flashMode == .on {
                 device.flashMode = .off
             } else if device.flashMode == .off {
-                device.flashMode = .auto
-            } else {
+                if device.isFlashModeSupported(.auto) {
+                    device.flashMode = .auto
+                } else {
+                    device.flashMode = .on
+                }
+            } else if device.flashMode == .auto {
                 device.flashMode = .on
             }
             device.unlockForConfiguration()
             return device.flashMode
         } catch _ { return nil }
+    }
+ */
+
+    open func flashModeFromUserDefaults() -> AVCaptureDevice.FlashMode {
+        let rawValue = UserDefaults.standard.integer(forKey: "ZeroCam.flashMode")
+        return AVCaptureDevice.FlashMode(rawValue: rawValue)!
+    }
+
+    open func updateFlashModeToUserDefautls(_ flashMode: AVCaptureDevice.FlashMode) {
+        UserDefaults.standard.set(flashMode.rawValue, forKey: "ZeroCam.flashMode")
     }
 
     /// Sets whether SwiftyCam should enable background audio from other applications or sources
