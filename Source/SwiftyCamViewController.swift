@@ -201,6 +201,7 @@ open class SwiftyCamViewController: UIViewController {
 
     fileprivate(set) public var singleTapGesture: UITapGestureRecognizer!
 
+    fileprivate(set) public var doubleTapGesture: UITapGestureRecognizer!
 
     // MARK: Public Get-only Variable Declarations
 
@@ -322,19 +323,33 @@ open class SwiftyCamViewController: UIViewController {
 
         previewLayer.session = session
 
+    }
+
+    public func start() {
+        if !self.session.isRunning {
+            authorize() {
+                self.setup()
+            }
+        }
+    }
+
+    func authorize(_ onSuccess: @escaping ()->()) {
         // Test authorization status for Camera and Micophone
 
         switch AVCaptureDevice.authorizationStatus(forMediaType: AVMediaTypeVideo){
         case .authorized:
 
             // already authorized
+            onSuccess()
             break
         case .notDetermined:
 
             // not yet determined
             sessionQueue.suspend()
             AVCaptureDevice.requestAccess(forMediaType: AVMediaTypeVideo, completionHandler: { [unowned self] granted in
-                if !granted {
+                if granted {
+                    onSuccess()
+                } else {
                     self.setupResult = .notAuthorized
                 }
                 self.sessionQueue.resume()
@@ -346,6 +361,45 @@ open class SwiftyCamViewController: UIViewController {
         }
         sessionQueue.async { [unowned self] in
             self.configureSession()
+        }
+    }
+
+    // Should be called after auth and when the view appears
+    func setup() {
+        // Subscribe to device rotation notifications
+
+        if shouldUseDeviceOrientation {
+            subscribeToDeviceOrientationChangeNotifications()
+        }
+
+        // Set background audio preference
+
+        setBackgroundAudioPreference()
+
+        sessionQueue.async {
+            switch self.setupResult {
+            case .success:
+                // Begin Session
+                self.session.startRunning()
+                self.isSessionRunning = self.session.isRunning
+
+                // Preview layer video orientation can be set only after the connection is created
+                DispatchQueue.main.async {
+                    self.previewLayer.videoPreviewLayer.connection?.videoOrientation = self.getPreviewLayerOrientation()
+                }
+
+            case .notAuthorized:
+                // Prompt to App Settings
+                self.promptToAppSettings()
+            case .configurationFailed:
+                // Unknown Error
+                DispatchQueue.main.async(execute: { [unowned self] in
+                    let message = NSLocalizedString("Unable to capture media", comment: "Alert message when something goes wrong during capture session configuration")
+                    let alertController = UIAlertController(title: "AVCam", message: message, preferredStyle: .alert)
+                    alertController.addAction(UIAlertAction(title: NSLocalizedString("OK", comment: "Alert OK button"), style: .cancel, handler: nil))
+                    self.present(alertController, animated: true, completion: nil)
+                })
+            }
         }
     }
 
@@ -405,41 +459,7 @@ open class SwiftyCamViewController: UIViewController {
     override open func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
 
-        // Subscribe to device rotation notifications
-
-        if shouldUseDeviceOrientation {
-            subscribeToDeviceOrientationChangeNotifications()
-        }
-
-        // Set background audio preference
-
-        setBackgroundAudioPreference()
-
-        sessionQueue.async {
-            switch self.setupResult {
-            case .success:
-                // Begin Session
-                self.session.startRunning()
-                self.isSessionRunning = self.session.isRunning
-
-                // Preview layer video orientation can be set only after the connection is created
-                DispatchQueue.main.async {
-                    self.previewLayer.videoPreviewLayer.connection?.videoOrientation = self.getPreviewLayerOrientation()
-                }
-
-            case .notAuthorized:
-                // Prompt to App Settings
-                self.promptToAppSettings()
-            case .configurationFailed:
-                // Unknown Error
-                DispatchQueue.main.async(execute: { [unowned self] in
-                    let message = NSLocalizedString("Unable to capture media", comment: "Alert message when something goes wrong during capture session configuration")
-                    let alertController = UIAlertController(title: "AVCam", message: message, preferredStyle: .alert)
-                    alertController.addAction(UIAlertAction(title: NSLocalizedString("OK", comment: "Alert OK button"), style: .cancel, handler: nil))
-                    self.present(alertController, animated: true, completion: nil)
-                })
-            }
-        }
+        
     }
 
     // MARK: ViewDidDisappear
@@ -621,17 +641,17 @@ open class SwiftyCamViewController: UIViewController {
             for input in self.session.inputs {
                 self.session.removeInput(input as! AVCaptureInput)
             }
-
             self.addInputs()
+
+            // If flash is enabled, disable it as the torch is needed for front facing camera
+            self.disableFlashIfNeeded()
+
             DispatchQueue.main.async {
                 self.cameraDelegate?.swiftyCam(self, didSwitchCameras: self.currentCamera)
             }
 
             self.session.startRunning()
         }
-
-        // If flash is enabled, disable it as the torch is needed for front facing camera
-        disableFlash()
     }
 
     // MARK: Private Functions
@@ -1025,7 +1045,15 @@ open class SwiftyCamViewController: UIViewController {
 
     /// Disable flash
 
+    func disableFlashIfNeeded() {
+        if !isFlashModeSupported(self.flashMode) {
+            self.flashMode = .off
+        }
+    }
+
     fileprivate func disableFlash() {
+        self.flashMode = .off
+        /*
         guard let device = AVCaptureDevice.defaultDevice(withMediaType: AVMediaTypeVideo), device.hasFlash else {
             return
         }
@@ -1041,6 +1069,18 @@ open class SwiftyCamViewController: UIViewController {
                 fatalError("[CameraEngine] error lock configuration device")
             }
         }
+         */
+    }
+
+    public func isFlashModeSupported(_ mode: AVCaptureDevice.FlashMode) -> Bool {
+        if let currentDevice = videoDevice, let captureOutput = self.photoFileOutput, currentDevice.isFlashAvailable {
+            if #available(iOS 10.0, *) {
+                return (captureOutput as! AVCapturePhotoOutput).__supportedFlashModes.contains(NSNumber(value: mode.rawValue))
+            } else {
+                return currentDevice.isFlashModeSupported(mode)
+            }
+        }
+        return false
     }
 
     public func cycleFlashMode() {
@@ -1089,7 +1129,7 @@ open class SwiftyCamViewController: UIViewController {
     }
 
     open func updateFlashMode() {
-        if let currentDevice = videoDevice, let captureOutput = self.photoFileOutput, currentDevice.isFlashAvailable  {
+        if let currentDevice = videoDevice, let captureOutput = self.photoFileOutput {
             if #available(iOS 10.0, *) {
                 let isFlashModeSupported = (captureOutput as! AVCapturePhotoOutput).__supportedFlashModes.contains(NSNumber(value: self.flashMode.rawValue))
                 if isFlashModeSupported {
@@ -1104,37 +1144,6 @@ open class SwiftyCamViewController: UIViewController {
             }
         }
     }
-
-    /// Cycles on, off, auto for flash
-    // off = 0, on = 1, auto = 2
-    /*
-    public func cycleFlash() -> AVCaptureFlashMode? {
-        //        guard let device = AVCaptureDevice.defaultDevice(withMediaType: AVMediaTypeVideo), device.hasFlash else {
-        //            return
-        //        }
-        guard let device = videoDevice else {
-            return nil
-        }
-
-        print("new guts")
-        do {
-            try device.lockForConfiguration()
-            if device.flashMode == .on {
-                device.flashMode = .off
-            } else if device.flashMode == .off {
-                if device.isFlashModeSupported(.auto) {
-                    device.flashMode = .auto
-                } else {
-                    device.flashMode = .on
-                }
-            } else if device.flashMode == .auto {
-                device.flashMode = .on
-            }
-            device.unlockForConfiguration()
-            return device.flashMode
-        } catch _ { return nil }
-    }
- */
 
     open func flashModeFromUserDefaults() -> AVCaptureDevice.FlashMode {
         let rawValue = UserDefaults.standard.integer(forKey: "ZeroCam.flashMode")
@@ -1367,7 +1376,7 @@ extension SwiftyCamViewController {
         singleTapGesture.delegate = self
         previewLayer.addGestureRecognizer(singleTapGesture)
 
-        let doubleTapGesture = UITapGestureRecognizer(target: self, action: #selector(doubleTapGesture(tap:)))
+        doubleTapGesture = UITapGestureRecognizer(target: self, action: #selector(doubleTapGesture(tap:)))
         doubleTapGesture.numberOfTapsRequired = 2
         doubleTapGesture.delegate = self
         previewLayer.addGestureRecognizer(doubleTapGesture)

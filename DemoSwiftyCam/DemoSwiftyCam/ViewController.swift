@@ -36,6 +36,11 @@ class ViewController: SwiftyCamViewController, SwiftyCamViewControllerDelegate {
 		return true
 	}
 
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        start()
+    }
+
 	override func viewDidAppear(_ animated: Bool) {
 		super.viewDidAppear(animated)
         captureButton.delegate = self
