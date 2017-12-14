@@ -322,18 +322,9 @@ open class SwiftyCamViewController: UIViewController {
         addGestureRecognizers()
 
         previewLayer.session = session
-
     }
 
-    public func start() {
-        if !self.session.isRunning {
-            authorize() {
-                self.setup()
-            }
-        }
-    }
-
-    func authorize(_ onSuccess: @escaping ()->()) {
+    public func authorize(onSuccess: @escaping ()->(), onFail: @escaping ()->()) {
         // Test authorization status for Camera and Micophone
 
         switch AVCaptureDevice.authorizationStatus(forMediaType: AVMediaTypeVideo){
@@ -351,6 +342,7 @@ open class SwiftyCamViewController: UIViewController {
                     onSuccess()
                 } else {
                     self.setupResult = .notAuthorized
+                    onFail()
                 }
                 self.sessionQueue.resume()
             })
@@ -358,14 +350,20 @@ open class SwiftyCamViewController: UIViewController {
 
             // already been asked. Denied access
             setupResult = .notAuthorized
+
+            onFail()
         }
+    }
+
+    public func setup() {
         sessionQueue.async { [unowned self] in
             self.configureSession()
         }
     }
 
+
     // Should be called after auth and when the view appears
-    func setup() {
+    public func start() {
         // Subscribe to device rotation notifications
 
         if shouldUseDeviceOrientation {
@@ -458,8 +456,6 @@ open class SwiftyCamViewController: UIViewController {
 
     override open func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
-
-        
     }
 
     // MARK: ViewDidDisappear
@@ -470,6 +466,12 @@ open class SwiftyCamViewController: UIViewController {
     override open func viewDidDisappear(_ animated: Bool) {
         super.viewDidDisappear(animated)
 
+        print("SwiftyCamViewController / viewDidDisappear")
+
+        //stop()
+    }
+
+    func stop() {
         // If session is running, stop the session
         if self.isSessionRunning == true {
             self.session.stopRunning()
@@ -659,6 +661,7 @@ open class SwiftyCamViewController: UIViewController {
     /// Configure session, add inputs and outputs
 
     fileprivate func configureSession() {
+        print("configureSession setupResult:", setupResult)
         guard setupResult == .success else {
             return
         }
@@ -677,6 +680,7 @@ open class SwiftyCamViewController: UIViewController {
         configurePhotoOutput()
 
         session.commitConfiguration()
+        print("configureSession configuration committed")
     }
 
     /// Add inputs after changing camera()
